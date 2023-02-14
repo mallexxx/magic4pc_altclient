@@ -12,7 +12,7 @@ import (
 
 	"github.com/go-vgo/robotgo"
 
-	"github.com/mafredri/magic4linux/m4p"
+	"github.com/netham45/magic4win_client/m4p"
 )
 
 const (
