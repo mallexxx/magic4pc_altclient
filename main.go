@@ -11,7 +11,7 @@ import (
     "syscall"
     "time"
     "github.com/go-vgo/robotgo"
-    "github.com/netham45/magic4win_client/m4p"
+    "github.com/netham45/magic4pc_altclient/m4p"
 )
 
 func main() {
