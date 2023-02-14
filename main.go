@@ -22,11 +22,19 @@ const (
 )
 
 func main() {
-    for {    
-        ctx,cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+    for {
+        ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
         defer cancel()
-        run(ctx)
-        time.Sleep(10 * time.Second)
+		run(ctx)
+		time.Sleep(2 * time.Second)
+        select {
+        case <-ctx.Done():
+            fmt.Println("Exiting...")
+            return
+		default:
+		    run(ctx)
+		    time.Sleep(2 * time.Second)
+        }
     }
 }
 
@@ -97,7 +105,7 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
             fixedx := float64(x) * float64(1.00313479624)  // Mouse only ranges from 0-1914, 0-1074, adjust to 0-1920, 0-1080
             fixedy := float64(y) * float64(1.00558659218)
             //fmt.Println("Move mouse", fixedx, fixedy)            
-            robotgo.Move(int(fixedx),int(fixedy))
+            robotgo.Move(int(fixedx * 2),int(fixedy * 2))
             
             // log.Printf("connect: %d %d %#v %#v %#v %#v", returnValue, deviceID, coordinate, gyroscope, acceleration, quaternion)
 
