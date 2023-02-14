@@ -66,6 +66,9 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 			if key == 406 {
 				robotgo.Toggle("right", state)
 			}
+			if key == 405 {
+				robotgo.Toggle("center", state)
+			}
 			
 		case m4p.RemoteUpdateMessage:
 			// log.Printf("connect: got %s: %s", m.Type, hex.EncodeToString(m.RemoteUpdate.Payload))
