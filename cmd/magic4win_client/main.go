@@ -89,7 +89,7 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 			// log.Printf("connect: %d %d %#v %#v %#v %#v", returnValue, deviceID, coordinate, gyroscope, acceleration, quaternion)
 
 		case m4p.MouseMessage:
-		    l//og.Printf("Type: %s", m.Mouse.Type)
+		    //log.Printf("Type: %s", m.Mouse.Type)
 			switch m.Mouse.Type {
 			case "mousedown":
 			    robotgo.Click("left", true)
