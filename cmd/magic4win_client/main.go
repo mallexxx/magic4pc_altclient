@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/go-vgo/robotgo"
 
@@ -25,8 +26,11 @@ const (
 func main() {
 	ctx,cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	leftClicked = false
-	run(ctx)
+	for {
+	    leftClicked = false
+	    run(ctx)
+		time.Sleep(10)
+	}
 }
 
 func run(ctx context.Context) error {
