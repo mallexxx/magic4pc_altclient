@@ -83,8 +83,11 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 
 			x := coordinate[0]
 			y := coordinate[1]
-			//fmt.Println("Move mouse", x, y)
-			robotgo.Move(int(x),int(y))
+			fixedx := float64(x) * float64(1.00313479624)  // Mouse only ranges from 0-1914, 0-1074, adjust to 0-1920, 0-1080
+			fixedy := float64(y) * float64(1.00558659218)
+			//fmt.Println("Move mouse", fixedx, fixedy)			
+			
+			robotgo.Move(int(fixedx),int(fixedy))
 			
 			// log.Printf("connect: %d %d %#v %#v %#v %#v", returnValue, deviceID, coordinate, gyroscope, acceleration, quaternion)
 
