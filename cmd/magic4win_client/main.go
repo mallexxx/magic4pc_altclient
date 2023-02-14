@@ -16,8 +16,6 @@ import (
 	"github.com/netham45/magic4win_client/m4p"
 )
 
-var leftClicked bool
-
 const (
 	broadcastPort    = 42830
 	subscriptionPort = 42831
@@ -26,8 +24,7 @@ const (
 func main() {
 	ctx,cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	for {
-	    leftClicked = false
+	for {	
 	    run(ctx)
 		time.Sleep(10)
 	}
@@ -97,11 +94,7 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 			fixedx := float64(x) * float64(1.00313479624)  // Mouse only ranges from 0-1914, 0-1074, adjust to 0-1920, 0-1080
 			fixedy := float64(y) * float64(1.00558659218)
 			//fmt.Println("Move mouse", fixedx, fixedy)			
-			if leftClicked == false {
-			    robotgo.Move(int(fixedx),int(fixedy))
-			} else{
-			    robotgo.Drag(int(fixedx),int(fixedy))
-			}
+			robotgo.Move(int(fixedx),int(fixedy))
 			
 			// log.Printf("connect: %d %d %#v %#v %#v %#v", returnValue, deviceID, coordinate, gyroscope, acceleration, quaternion)
 
@@ -109,15 +102,9 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 		    //log.Printf("Type: %s", m.Mouse.Type)
 			switch m.Mouse.Type {
 			case "mousedown":
-				if leftClicked == false {
-			        robotgo.Toggle("left", "down")
-					leftClicked = true
-					log.Printf("Left clicked!")
-				}
+				robotgo.Toggle("left", "down")
 			case "mouseup":
-				leftClicked = false
 			    robotgo.Toggle("left", "up")
-				log.Printf("Left released!")
 			}
 
 		case m4p.WheelMessage:
