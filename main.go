@@ -10,18 +10,12 @@ import (
     "os/signal"
     "syscall"
     "time"
-
     "github.com/go-vgo/robotgo"
-
     "github.com/netham45/magic4win_client/m4p"
 )
 
-const (
-    broadcastPort    = 42830
-    subscriptionPort = 42831
-)
-
 func main() {
+    dev := m4p.DeviceInfo{IPAddr: "192.168.5.101", Port: 42831}
     for {
         ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
         defer cancel()
@@ -32,17 +26,12 @@ func main() {
             fmt.Println("Exiting...")
             return
 		default:
-		    run(ctx)
+		    connect(ctx, dev)
 		    time.Sleep(2 * time.Second)
         }
     }
 }
 
-func run(ctx context.Context) error {
-
-    dev := m4p.DeviceInfo{IPAddr: "192.168.5.101", Port: 42831}
-    return connect(ctx, dev)
-}
 
 func connect(ctx context.Context, dev m4p.DeviceInfo) error {
     addr := fmt.Sprintf("%s:%d", dev.IPAddr, dev.Port)
@@ -62,15 +51,13 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 
         switch m.Type {
         case m4p.InputMessage:
-            log.Printf("connect: got %s: %v", m.Type, m.Input)
-
             key := m.Input.Parameters.KeyCode
             pressed := m.Input.Parameters.IsDown
             state := "up"
             if pressed {
                 state = "down"
             }
-            log.Printf("Key: %i ressed: %b", key, pressed)
+            log.Printf("Key: %i pressed: %b", key, pressed)
             if key == 406 {
                 robotgo.Toggle("right", state)
             }
@@ -79,8 +66,6 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
             }
             
         case m4p.RemoteUpdateMessage:
-            // log.Printf("connect: got %s: %s", m.Type, hex.EncodeToString(m.RemoteUpdate.Payload))
-
             r := bytes.NewReader(m.RemoteUpdate.Payload)
             var returnValue, deviceID uint8
             var coordinate [2]int32
@@ -100,17 +85,11 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
                 }
             }
 
-            x := coordinate[0]
-            y := coordinate[1]
-            fixedx := float64(x) * float64(1.00313479624)  // Mouse only ranges from 0-1914, 0-1074, adjust to 0-1920, 0-1080
-            fixedy := float64(y) * float64(1.00558659218)
-            //fmt.Println("Move mouse", fixedx, fixedy)            
+            fixedx := float64(coordinate[0]) * float64(1.00313479624)  // Mouse only ranges from 0-1914, 0-1074, adjust to 0-1920, 0-1080
+            fixedy := float64(coordinate[1]) * float64(1.00558659218)         
             robotgo.Move(int(fixedx * 2),int(fixedy * 2))
-            
-            // log.Printf("connect: %d %d %#v %#v %#v %#v", returnValue, deviceID, coordinate, gyroscope, acceleration, quaternion)
 
         case m4p.MouseMessage:
-            //log.Printf("Type: %s", m.Mouse.Type)
             switch m.Mouse.Type {
             case "mousedown":
                 robotgo.Toggle("left", "down")
