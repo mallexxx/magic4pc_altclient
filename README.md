@@ -1,4 +1,4 @@
-# magic4win_client
+# magic4pc_altclient
 
 Allows you to use the magic remote on your webOS LG TV as a mouse for your ~~PC~~ ~~Linux~~ machine that'll run robotgo.
 
