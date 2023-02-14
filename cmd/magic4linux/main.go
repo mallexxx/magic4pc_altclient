@@ -98,7 +98,6 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 			}
 
 		case m4p.WheelMessage:
-		   // log.Printf("WHEEEEEEEL %i", m.Wheel.Delta)
 			robotgo.Scroll(0,int(m.Wheel.Delta/60))
 		default:
 		}
