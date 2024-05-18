@@ -5,19 +5,52 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/getlantern/systray"
 	"github.com/go-vgo/robotgo"
 	"github.com/netham45/magic4pc_altclient/m4p"
 )
 
 func main() {
-	ipAddr := "192.168.1.76"
+	systray.Run(onReady, onExit)
+}
+
+func onReady() {
+	// Add a menu item with label "Exit" and action to exit the application
+	exitMenuItem := systray.AddMenuItem("Exit", "Exit the application")
+
+	// Set an action for the "Exit" menu item
+	go func() {
+		<-exitMenuItem.ClickedCh
+		fmt.Println("Exiting...")
+		systray.Quit()
+	}()
+
+	// Get the icon data
+	iconData, err := getIconData("icon.ico")
+	if err != nil {
+		fmt.Println("Error loading icon data:", err)
+		return
+	}
+
+	// Set the icon for the systray
+	systray.SetIcon(iconData)
+
+	// Set the tooltip text for the systray
+	systray.SetTooltip("magic4pc")
+
+	go startUDPListener()
+
+	ipAddr := "192.168.1.75"
 	port := 42831
 
 	if len(os.Args) > 1 {
@@ -47,6 +80,52 @@ func main() {
 			}
 
 			time.Sleep(5 * time.Second)
+		}
+	}
+}
+
+const (
+	listenAddr = "0.0.0.0:9105" // sleep UDP listen address
+)
+
+func startUDPListener() {
+	udpAddr, err := net.ResolveUDPAddr("udp", listenAddr)
+	if err != nil {
+		fmt.Println("Error resolving UDP address:", err)
+		os.Exit(1)
+	}
+
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		fmt.Println("Error listening:", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+
+	fmt.Println("UDP server started. Listening on", listenAddr)
+
+	buffer := make([]byte, 1024)
+
+	for {
+		n, addr, err := conn.ReadFromUDP(buffer)
+		if err != nil {
+			fmt.Println("Error reading from UDP:", err)
+			continue
+		}
+		fmt.Printf("Received UDP packet from %s: %s\n", addr.String(), string(buffer[:n]))
+
+		// If a sleep command is received, put the system to sleep
+		if string(buffer[:n]) == "sleep" {
+			fmt.Println("Received sleep command. Putting system to sleep...")
+
+			// Execute a Windows shell command to put the system to sleep
+			cmd := exec.Command("cmd", "/C", "rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
+			err := cmd.Run()
+			if err != nil {
+				fmt.Println("Error executing sleep command:", err)
+				continue
+			}
+			fmt.Println("System is now in sleep mode.")
 		}
 	}
 }
@@ -85,14 +164,21 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 			case 461: // back
 				robotgo.Toggle("x1", state) // XBUTTON1 == Go Back
 
-			// case 403: // red
+			case 403: // red
+				robotgo.KeyToggle("cmd", state)
+
 			case 404: // green
-				robotgo.Toggle("x2", state) // XBUTTON2 == Go Forward
+				robotgo.KeyToggle("escape", state)
 
 			case 405: // yellow
-				robotgo.Toggle("center", state)
+				break
+
 			case 406: // blue
-				robotgo.Toggle("right", state)
+				robotgo.Toggle("x2", state) // XBUTTON2 == Go Forward
+
+			case 458: // GUIDE
+				robotgo.Toggle("right", state) // Right click
+
 			default:
 				if key < 1000 {
 					robotgo.KeyToggles(key, state)
@@ -143,4 +229,25 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 		default:
 		}
 	}
+}
+
+func onExit() {
+	// Cleanup on exit, if needed
+}
+
+func getIconData(filename string) ([]byte, error) {
+	// Open the PNG file
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	// Read the contents of the file
+	iconData, err := ioutil.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+
+	return iconData, nil
 }
