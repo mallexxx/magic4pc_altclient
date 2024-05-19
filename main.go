@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -15,39 +14,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/getlantern/systray"
 	"github.com/go-vgo/robotgo"
 	"github.com/netham45/magic4pc_altclient/m4p"
 )
 
 func main() {
-	systray.Run(onReady, onExit)
-}
-
-func onReady() {
-	// Add a menu item with label "Exit" and action to exit the application
-	exitMenuItem := systray.AddMenuItem("Exit", "Exit the application")
-
-	// Set an action for the "Exit" menu item
-	go func() {
-		<-exitMenuItem.ClickedCh
-		fmt.Println("Exiting...")
-		systray.Quit()
-	}()
-
-	// Get the icon data
-	iconData, err := getIconData("icon.ico")
-	if err != nil {
-		fmt.Println("Error loading icon data:", err)
-		return
-	}
-
-	// Set the icon for the systray
-	systray.SetIcon(iconData)
-
-	// Set the tooltip text for the systray
-	systray.SetTooltip("magic4pc")
-
 	go startUDPListener()
 
 	ipAddr := "192.168.1.75"
@@ -229,25 +200,4 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 		default:
 		}
 	}
-}
-
-func onExit() {
-	// Cleanup on exit, if needed
-}
-
-func getIconData(filename string) ([]byte, error) {
-	// Open the PNG file
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	// Read the contents of the file
-	iconData, err := ioutil.ReadAll(file)
-	if err != nil {
-		return nil, err
-	}
-
-	return iconData, nil
 }
