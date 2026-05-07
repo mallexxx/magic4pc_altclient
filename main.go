@@ -5,14 +5,16 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
-	"io"
 	"os/exec"
-	"path/filepath"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,8 +22,8 @@ import (
 )
 
 func main() {
-	initMoveWorker()
-	c := make(chan os.Signal)
+	initXdoWorker()
+	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
@@ -52,13 +54,12 @@ func main() {
 			}
 			fmt.Println("Failed to connect,", err, "retrying in 2 seconds...")
 		}
-
 		time.Sleep(2 * time.Second)
 	}
 }
 
 const (
-	listenAddr = "0.0.0.0:9105" // sleep UDP listen address
+	listenAddr = "0.0.0.0:9105"
 )
 
 func startUDPListener() {
@@ -67,18 +68,14 @@ func startUDPListener() {
 		fmt.Println("Error resolving UDP address:", err)
 		os.Exit(1)
 	}
-
 	conn, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
 		fmt.Println("Error listening:", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
-
 	fmt.Println("UDP server started. Listening on", listenAddr)
-
 	buffer := make([]byte, 1024)
-
 	for {
 		n, addr, err := conn.ReadFromUDP(buffer)
 		if err != nil {
@@ -86,20 +83,6 @@ func startUDPListener() {
 			continue
 		}
 		fmt.Printf("Received UDP packet from %s: %s\n", addr.String(), string(buffer[:n]))
-
-		// If a sleep command is received, put the system to sleep
-		if string(buffer[:n]) == "sleep" {
-			fmt.Println("Received sleep command. Putting system to sleep...")
-
-			// Execute a Windows shell command to put the system to sleep
-			cmd := exec.Command("cmd", "/C", "rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
-			err := cmd.Run()
-			if err != nil {
-				fmt.Println("Error executing sleep command:", err)
-				continue
-			}
-			fmt.Println("System is now in sleep mode.")
-		}
 	}
 }
 
@@ -131,34 +114,24 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 			switch key {
 			case 415: // play
 				ydoKey("XF86AudioPlay", state == "down")
-
 			case 413: // stop
 				ydoKey("XF86AudioStop", state == "down")
-
 			case 0x13: // pause
 				ydoKey("XF86AudioPause", state == "down")
-
 			case 461: // back
-				ydoClick("x1", state == "down") // XBUTTON1 == Go Back
-
+				ydoClick("x1", state == "down")
 			case 403: // red
 				ydoKey("super", state == "down")
-
 			case 404: // green
 				ydoKey("Escape", state == "down")
-
 			case 405: // yellow
 				ydoKey("c", state == "down")
-
 			case 406: // blue
-				ydoClick("x2", state == "down") // XBUTTON2 == Go Forward
-
+				ydoClick("x2", state == "down")
 			case 13: // Enter
 				ydoKey("Return", state == "down")
-
 			case 458: // GUIDE
-				ydoClick("right", state == "down") // Right click
-
+				ydoClick("right", state == "down")
 			default:
 				if key < 1000 {
 					ydoKey(fmt.Sprintf("%d", key), state == "down")
@@ -184,19 +157,13 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 					break
 				}
 			}
-
 			fixedx := float64(coordinate[0]) * float64(1.00313479624) // 1080p
 			fixedy := float64(coordinate[1]) * float64(1.00558659218)
-			// fixedx := float64(coordinate[0]) * float64(0.668756530825496) // 4K // Mouse only ranges from 0-1914, 0-1074, adjust to 0-3840, 0-2160
-			// fixedy := float64(coordinate[1]) * float64(0.670391061452514)
-
-			//log.Printf("%d x %d : fixedx: %f x %f", coordinate[0], coordinate[1], fixedx, fixedy)
-
-			if coordinate[0] != 0 || coordinate[1] != 0 { ydoMove(int(fixedx), int(fixedy)) }
+			if coordinate[0] != 0 || coordinate[1] != 0 {
+				ydoMove(int(fixedx), int(fixedy))
+			}
 
 		case m4p.MouseMessage:
-
-			// fmt.Println("Mouse Message %s", m.Mouse.Type)
 			switch m.Mouse.Type {
 			case "mousedown":
 				ydoClick("left", true)
@@ -205,19 +172,66 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 			}
 
 		case m4p.WheelMessage:
-	
 			ydoScroll(int(m.Wheel.Delta))
+
 		default:
 		}
 	}
 }
 
-// moveCh — координаты для xdotool, буфер 1 (старые выбрасываем)
-var moveCh = make(chan [2]int, 1)
+// --- Single persistent xdotool process ---
 
-// getXauth читает XAUTHORITY из cmdline kwin_wayland
-func getXauth() string {
+// cmdCh carries all xdotool commands (mouse moves + buttons/keys).
+// Buffered: moves drop old coords, cmds have headroom.
+var moveCh = make(chan [2]int, 1)
+var cmdCh = make(chan string, 64)
+
+// getXDisplay returns the current active X display number and xauth path.
+// Prefers KDE/kwin_wayland, falls back to first available socket.
+func getXDisplay() (display string, xauth string) {
+	// Try to find kwin_wayland and its --xwayland-display / --xwayland-xauthority args
 	matches, _ := filepath.Glob("/proc/*/cmdline")
+	for _, f := range matches {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		args := bytes.Split(data, []byte{0})
+		isKwin := false
+		for _, a := range args {
+			if strings.Contains(string(a), "kwin_wayland") {
+				isKwin = true
+				break
+			}
+		}
+		if !isKwin {
+			continue
+		}
+		for i, a := range args {
+			switch string(a) {
+			case "--xwayland-display":
+				if i+1 < len(args) {
+					display = string(args[i+1])
+				}
+			case "--xwayland-xauthority":
+				if i+1 < len(args) {
+					xauth = string(args[i+1])
+				}
+			}
+		}
+		if display != "" {
+			return display, xauth
+		}
+	}
+
+	// Fallback: first X socket
+	sockets, _ := filepath.Glob("/tmp/.X11-unix/X*")
+	if len(sockets) > 0 {
+		num := strings.TrimPrefix(filepath.Base(sockets[0]), "X")
+		display = ":" + num
+	}
+
+	// Fallback xauth: kwin xauthority arg only
 	for _, f := range matches {
 		data, err := os.ReadFile(f)
 		if err != nil {
@@ -226,59 +240,102 @@ func getXauth() string {
 		args := bytes.Split(data, []byte{0})
 		for i, a := range args {
 			if string(a) == "--xwayland-xauthority" && i+1 < len(args) {
-				return string(args[i+1])
+				xauth = string(args[i+1])
+				return display, xauth
 			}
 		}
 	}
-	return ""
+	return display, xauth
 }
 
-func initMoveWorker() {
+func initXdoWorker() {
 	go func() {
-		var xdoStdin io.WriteCloser
-		var xdoCmd *exec.Cmd
+		var (
+			mu      sync.Mutex
+			stdin   io.WriteCloser
+			cmd     *exec.Cmd
+			curDisp string
+		)
 
-		startXdotool := func() {
-			if xdoStdin != nil {
-				xdoStdin.Close()
+		startXdotool := func(disp, xauth string) {
+			mu.Lock()
+			defer mu.Unlock()
+			if stdin != nil {
+				stdin.Close()
+				stdin = nil
 			}
-			xauth := getXauth()
-			cmd := exec.Command("/usr/bin/xdotool", "-")
-			cmd.Env = append(os.Environ(), "DISPLAY=:0", "XAUTHORITY="+xauth)
-			stdin, err := cmd.StdinPipe()
+			if cmd != nil {
+				cmd.Wait()
+				cmd = nil
+			}
+			c := exec.Command("/usr/bin/xdotool", "-")
+			c.Env = append(os.Environ(), "DISPLAY="+disp, "XAUTHORITY="+xauth)
+			s, err := c.StdinPipe()
 			if err != nil {
-				log.Printf("xdotool stdin pipe error: %v", err)
+				log.Printf("xdotool StdinPipe: %v", err)
 				return
 			}
-			if err := cmd.Start(); err != nil {
-				log.Printf("xdotool start error: %v", err)
+			if err := c.Start(); err != nil {
+				log.Printf("xdotool Start: %v", err)
 				return
 			}
-			xdoCmd = cmd
-			xdoStdin = stdin
-			log.Printf("xdotool started, XAUTHORITY=%s", xauth)
+			cmd = c
+			stdin = s
+			curDisp = disp
+			log.Printf("xdotool started on %s", disp)
 		}
 
-		startXdotool()
-
-		for pos := range moveCh {
-			if xdoStdin == nil {
-				startXdotool()
-				if xdoStdin == nil {
-					continue
+		write := func(line string) {
+			mu.Lock()
+			s := stdin
+			mu.Unlock()
+			if s == nil {
+				return
+			}
+			if _, err := fmt.Fprintf(s, "%s\n", line); err != nil {
+				log.Printf("xdotool write error: %v — restarting", err)
+				disp, xauth := getXDisplay()
+				startXdotool(disp, xauth)
+				mu.Lock()
+				s2 := stdin
+				mu.Unlock()
+				if s2 != nil {
+					fmt.Fprintf(s2, "%s\n", line)
 				}
 			}
-			_, err := fmt.Fprintf(xdoStdin, "mousemove %d %d\n", pos[0], pos[1])
-			if err != nil {
-				log.Printf("xdotool write error: %v, restarting", err)
-				if xdoCmd != nil {
-					xdoCmd.Wait()
+		}
+
+		// Initial start
+		disp, xauth := getXDisplay()
+		if disp == "" {
+			disp = ":0"
+		}
+		startXdotool(disp, xauth)
+
+		// Watch for display changes every 2s
+		go func() {
+			for {
+				time.Sleep(2 * time.Second)
+				d, xa := getXDisplay()
+				if d == "" {
+					d = ":0"
 				}
-				xdoStdin = nil
-				startXdotool()
-				if xdoStdin != nil {
-					fmt.Fprintf(xdoStdin, "mousemove %d %d\n", pos[0], pos[1])
+				mu.Lock()
+				same := d == curDisp
+				mu.Unlock()
+				if !same {
+					log.Printf("display changed: %s → %s, restarting xdotool", curDisp, d)
+					startXdotool(d, xa)
 				}
+			}
+		}()
+
+		for {
+			select {
+			case pos := <-moveCh:
+				write(fmt.Sprintf("mousemove %d %d", pos[0], pos[1]))
+			case line := <-cmdCh:
+				write(line)
 			}
 		}
 	}()
@@ -299,13 +356,9 @@ func ydoMove(x, y int) {
 	}
 }
 
+// ydoCmd sends to the single persistent xdotool — never spawns a new process.
 func ydoCmd(args ...string) {
-	cmd := exec.Command("/usr/bin/xdotool", args...)
-	xauth := getXauth()
-	cmd.Env = append(os.Environ(), "DISPLAY=:0", "XAUTHORITY="+xauth)
-	if err := cmd.Run(); err != nil {
-		log.Printf("xdotool %v error: %v", args, err)
-	}
+	cmdCh <- strings.Join(args, " ")
 }
 
 func ydoKey(key string, down bool) {
@@ -317,30 +370,23 @@ func ydoKey(key string, down bool) {
 }
 
 func ydoClick(button string, down bool) {
-	if button == "left" {
-		if down {
-			ydoCmd("mousedown", "1")
-		} else {
-			ydoCmd("mouseup", "1")
-		}
-	} else if button == "right" {
-		if down {
-			ydoCmd("mousedown", "3")
-		} else {
-			ydoCmd("mouseup", "3")
-		}
-	} else if button == "x1" {
-		if down {
-			ydoCmd("mousedown", "8")
-		} else {
-			ydoCmd("mouseup", "8")
-		}
-	} else if button == "x2" {
-		if down {
-			ydoCmd("mousedown", "9")
-		} else {
-			ydoCmd("mouseup", "9")
-		}
+	var btn string
+	switch button {
+	case "left":
+		btn = "1"
+	case "right":
+		btn = "3"
+	case "x1":
+		btn = "8"
+	case "x2":
+		btn = "9"
+	default:
+		return
+	}
+	if down {
+		ydoCmd("mousedown", btn)
+	} else {
+		ydoCmd("mouseup", btn)
 	}
 }
 
