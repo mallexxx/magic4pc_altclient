@@ -125,8 +125,16 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 			if pressed {
 				state = "down"
 			}
-			log.Printf("Key: %i pressed: %b", key, pressed)
+			log.Printf("Key: %d pressed: %v", key, pressed)
 			switch key {
+			case 37: // Left
+				ydoKey("Left", state == "down")
+			case 38: // Up
+				ydoKey("Up", state == "down")
+			case 39: // Right
+				ydoKey("Right", state == "down")
+			case 40: // Down
+				ydoKey("Down", state == "down")
 			case 415: // play
 				ydoKey("XF86AudioPlay", state == "down")
 			case 413: // stop
