@@ -251,10 +251,9 @@ func getXDisplay() (display string, xauth string) {
 func initXdoWorker() {
 	go func() {
 		var (
-			mu      sync.Mutex
-			stdin   io.WriteCloser
-			cmd     *exec.Cmd
-			curDisp string
+			mu    sync.Mutex
+			stdin io.WriteCloser
+			cmd   *exec.Cmd
 		)
 
 		startXdotool := func(disp, xauth string) {
@@ -281,7 +280,6 @@ func initXdoWorker() {
 			}
 			cmd = c
 			stdin = s
-			curDisp = disp
 			log.Printf("xdotool started on %s", disp)
 		}
 
@@ -311,24 +309,6 @@ func initXdoWorker() {
 			disp = ":0"
 		}
 		startXdotool(disp, xauth)
-
-		// Watch for display changes every 2s
-		go func() {
-			for {
-				time.Sleep(2 * time.Second)
-				d, xa := getXDisplay()
-				if d == "" {
-					d = ":0"
-				}
-				mu.Lock()
-				same := d == curDisp
-				mu.Unlock()
-				if !same {
-					log.Printf("display changed: %s → %s, restarting xdotool", curDisp, d)
-					startXdotool(d, xa)
-				}
-			}
-		}()
 
 		for {
 			select {
