@@ -54,6 +54,7 @@ func Dial(ctx context.Context, addr string, opts ...DialOption) (*Client, error)
 
 	d := &net.Dialer{
 		Timeout: 5 * time.Second,
+		LocalAddr: &net.UDPAddr{Port: 9106},
 	}
 	conn, err := d.DialContext(ctx, "udp4", addr)
 	if err != nil {
