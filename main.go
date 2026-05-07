@@ -161,8 +161,24 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 				ydoKey("Prior", state == "down")
 			case 34: // Ch Down
 				ydoKey("Next", state == "down")
-			case 405: // yellow → middle click
-				ydoCmd(map[bool]string{true: "mousedown 2", false: "mouseup 2"}[state == "down"])
+			case 405: // yellow → Ctrl+2 (Steam QAM) in gamescope, middle click in KDE
+				if state == "down" {
+					if isGamescopeSession() {
+						go func() {
+							cmd := exec.Command("/usr/bin/ydotool", "key", "29:1", "3:1", "3:0", "29:0")
+							cmd.Env = append(os.Environ(), "YDOTOOL_SOCKET=/run/user/1000/.ydotool_socket")
+							if err := cmd.Run(); err != nil {
+								log.Printf("sendQAM: %v", err)
+							}
+						}()
+					} else {
+						ydoCmd("mousedown 2")
+					}
+				} else {
+					if !isGamescopeSession() {
+						ydoCmd("mouseup 2")
+					}
+				}
 			case 406: // blue → right click
 				ydoClick("right", state == "down")
 			case 13: // Enter
