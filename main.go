@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -15,11 +16,25 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/netham45/magic4pc_altclient/m4p"
 )
+
+// TV always sends coords in 1920×1080 space.
+const tvWidth = 1920.0
+const tvHeight = 1080.0
+
+// scaleX/scaleY are updated after each xdotool start (actual screen size / TV space).
+var scaleX atomic.Value // float64
+var scaleY atomic.Value // float64
+
+func init() {
+	scaleX.Store(1.0)
+	scaleY.Store(1.0)
+}
 
 func main() {
 	initXdoWorker()
@@ -157,10 +172,10 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 					break
 				}
 			}
-			fixedx := float64(coordinate[0]) * float64(1.00313479624) // 1080p
-			fixedy := float64(coordinate[1]) * float64(1.00558659218)
 			if coordinate[0] != 0 || coordinate[1] != 0 {
-				ydoMove(int(fixedx), int(fixedy))
+				sx := scaleX.Load().(float64)
+				sy := scaleY.Load().(float64)
+				ydoMove(int(math.Round(float64(coordinate[0])*sx)), int(math.Round(float64(coordinate[1])*sy)))
 			}
 
 		case m4p.MouseMessage:
@@ -248,6 +263,39 @@ func getXDisplay() (display string, xauth string) {
 	return display, xauth
 }
 
+// getDisplaySize queries the actual screen dimensions via xdotool.
+// Falls back to tvWidth×tvHeight (scale=1) on error.
+func getDisplaySize(disp, xauth string) (w, h int) {
+	cmd := exec.Command("/usr/bin/xdotool", "getdisplaygeometry")
+	cmd.Env = append(os.Environ(), "DISPLAY="+disp, "XAUTHORITY="+xauth)
+	out, err := cmd.Output()
+	if err != nil {
+		log.Printf("getdisplaygeometry failed: %v, using default scale", err)
+		return int(tvWidth), int(tvHeight)
+	}
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) != 2 {
+		log.Printf("getdisplaygeometry unexpected output: %q, using default scale", out)
+		return int(tvWidth), int(tvHeight)
+	}
+	w, _ = strconv.Atoi(parts[0])
+	h, _ = strconv.Atoi(parts[1])
+	if w == 0 || h == 0 {
+		return int(tvWidth), int(tvHeight)
+	}
+	return w, h
+}
+
+func updateScale(disp, xauth string) {
+	w, h := getDisplaySize(disp, xauth)
+	sx := float64(w) / tvWidth
+	sy := float64(h) / tvHeight
+	scaleX.Store(sx)
+	scaleY.Store(sy)
+	log.Printf("screen size: %dx%d → scale %.4f×%.4f", w, h, sx, sy)
+}
+
+
 func initXdoWorker() {
 	go func() {
 		var (
@@ -281,6 +329,7 @@ func initXdoWorker() {
 			cmd = c
 			stdin = s
 			log.Printf("xdotool started on %s", disp)
+			go updateScale(disp, xauth)
 		}
 
 		write := func(line string) {
