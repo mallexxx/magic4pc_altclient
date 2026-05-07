@@ -284,22 +284,36 @@ func initXdoWorker() {
 		}
 
 		write := func(line string) {
-			mu.Lock()
-			s := stdin
-			mu.Unlock()
-			if s == nil {
-				return
-			}
-			if _, err := fmt.Fprintf(s, "%s\n", line); err != nil {
-				log.Printf("xdotool write error: %v — restarting", err)
-				disp, xauth := getXDisplay()
-				startXdotool(disp, xauth)
+			for attempts := 0; attempts < 3; attempts++ {
 				mu.Lock()
-				s2 := stdin
+				s := stdin
 				mu.Unlock()
-				if s2 != nil {
-					fmt.Fprintf(s2, "%s\n", line)
+				if s == nil {
+					// xdotool not running — try to start
+					time.Sleep(time.Duration(500+attempts*500) * time.Millisecond)
+					disp, xauth := getXDisplay()
+					if disp == "" {
+						disp = ":0"
+					}
+					startXdotool(disp, xauth)
+					continue
 				}
+				if _, err := fmt.Fprintf(s, "%s\n", line); err == nil {
+					return
+				}
+				// broken pipe — close and retry after delay
+				log.Printf("xdotool write error, retrying in 1s...")
+				mu.Lock()
+				if stdin != nil {
+					stdin.Close()
+					stdin = nil
+				}
+				if cmd != nil {
+					cmd.Wait()
+					cmd = nil
+				}
+				mu.Unlock()
+				time.Sleep(time.Second)
 			}
 		}
 
