@@ -147,17 +147,22 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 				ydoKey("super", state == "down")
 			case 404: // green
 				ydoKey("Escape", state == "down")
-			case 405: // yellow
-				ydoKey("c", state == "down")
-			case 406: // blue
-				ydoClick("x2", state == "down")
+			case 33: // Ch Up
+				ydoKey("Prior", state == "down")
+			case 34: // Ch Down
+				ydoKey("Next", state == "down")
+			case 405: // yellow → middle click
+				ydoCmd(map[bool]string{true: "mousedown 2", false: "mouseup 2"}[state == "down"])
+			case 406: // blue → right click
+				ydoClick("right", state == "down")
 			case 13: // Enter
 				ydoKey("Return", state == "down")
 			case 458: // GUIDE
 				ydoClick("right", state == "down")
 			default:
-				if key < 1000 {
-					ydoKey(fmt.Sprintf("%d", key), state == "down")
+				if key >= 32 && key < 127 {
+					// ASCII range — send as character, not raw keycode
+					ydoKey(string(rune(key)), state == "down")
 				}
 			}
 
