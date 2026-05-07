@@ -156,7 +156,12 @@ recvLoop:
 func (c *Client) keepalive() {
 	defer c.Close()
 
-	clientKeepalive := time.After(clientKeepaliveInterval)
+	clientKeepalive := time.NewTicker(clientKeepaliveInterval)
+	defer clientKeepalive.Stop()
+
+	// If we don't hear from the server for serverKeepaliveTimeout, reconnect.
+	serverTimeout := time.NewTimer(serverKeepaliveTimeout)
+	defer serverTimeout.Stop()
 
 	for {
 		select {
@@ -164,9 +169,20 @@ func (c *Client) keepalive() {
 			return
 
 		case <-c.serverKeepalive:
-			// server is alive, nothing to do
+			// server is alive — reset timeout
+			if !serverTimeout.Stop() {
+				select {
+				case <-serverTimeout.C:
+				default:
+				}
+			}
+			serverTimeout.Reset(serverKeepaliveTimeout)
 
-		case <-clientKeepalive:
+		case <-serverTimeout.C:
+			log.Printf("m4p: Client: keepalive: server silent for %v, disconnecting...", serverKeepaliveTimeout)
+			return
+
+		case <-clientKeepalive.C:
 			_, err := c.conn.Write([]byte("{}"))
 			if err != nil {
 				if errors.Is(err, net.ErrClosed) {
@@ -176,7 +192,6 @@ func (c *Client) keepalive() {
 				log.Printf("m4p: Client: keepalive: send client keepalive failed, disconnecting...")
 				return
 			}
-			clientKeepalive = time.After(clientKeepaliveInterval)
 		}
 	}
 }
