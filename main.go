@@ -8,17 +8,26 @@ import (
 	"log"
 	"net"
 	"os"
+	"io"
 	"os/exec"
+	"path/filepath"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/go-vgo/robotgo"
 	"github.com/netham45/magic4pc_altclient/m4p"
 )
 
 func main() {
+	initMoveWorker()
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		os.Exit(1)
+	}()
+
 	go startUDPListener()
 
 	ipAddr := "192.168.1.75"
@@ -37,21 +46,14 @@ func main() {
 
 	dev := m4p.DeviceInfo{IPAddr: ipAddr, Port: port}
 	for {
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-
-		select {
-		case <-ctx.Done():
-			fmt.Println("Exiting...")
-			return
-		default:
-
-			if err := connect(ctx, dev); err != nil {
-				fmt.Println("Failed to connect, retrying in 5 seconds...")
+		if err := connect(context.Background(), dev); err != nil {
+			if err == context.Canceled {
+				fmt.Println("Exiting 2...")
 			}
-
-			time.Sleep(5 * time.Second)
+			fmt.Println("Failed to connect,", err, "retrying in 2 seconds...")
 		}
+
+		time.Sleep(2 * time.Second)
 	}
 }
 
@@ -128,31 +130,38 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 			log.Printf("Key: %i pressed: %b", key, pressed)
 			switch key {
 			case 415: // play
-				robotgo.KeyToggle("audio_play", state)
+				ydoKey("XF86AudioPlay", state == "down")
+
+			case 413: // stop
+				ydoKey("XF86AudioStop", state == "down")
+
 			case 0x13: // pause
-				robotgo.KeyToggle("audio_pause", state)
+				ydoKey("XF86AudioPause", state == "down")
 
 			case 461: // back
-				robotgo.Toggle("x1", state) // XBUTTON1 == Go Back
+				ydoClick("x1", state == "down") // XBUTTON1 == Go Back
 
 			case 403: // red
-				robotgo.KeyToggle("cmd", state)
+				ydoKey("super", state == "down")
 
 			case 404: // green
-				robotgo.KeyToggle("escape", state)
+				ydoKey("Escape", state == "down")
 
 			case 405: // yellow
-				break
+				ydoKey("c", state == "down")
 
 			case 406: // blue
-				robotgo.Toggle("x2", state) // XBUTTON2 == Go Forward
+				ydoClick("x2", state == "down") // XBUTTON2 == Go Forward
+
+			case 13: // Enter
+				ydoKey("Return", state == "down")
 
 			case 458: // GUIDE
-				robotgo.Toggle("right", state) // Right click
+				ydoClick("right", state == "down") // Right click
 
 			default:
 				if key < 1000 {
-					robotgo.KeyToggles(key, state)
+					ydoKey(fmt.Sprintf("%d", key), state == "down")
 				}
 			}
 
@@ -176,28 +185,169 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 				}
 			}
 
-			// fixedx := float64(coordinate[0]) * float64(1.00313479624) // Mouse only ranges from 0-1914, 0-1074, adjust to 0-1920, 0-1080
-			// fixedy := float64(coordinate[1]) * float64(1.00558659218)
-			fixedx := float64(coordinate[0]) * float64(0.668756530825496) // Mouse only ranges from 0-1914, 0-1074, adjust to 0-3840, 0-2160
-			fixedy := float64(coordinate[1]) * float64(0.670391061452514)
+			fixedx := float64(coordinate[0]) * float64(1.00313479624) // 1080p
+			fixedy := float64(coordinate[1]) * float64(1.00558659218)
+			// fixedx := float64(coordinate[0]) * float64(0.668756530825496) // 4K // Mouse only ranges from 0-1914, 0-1074, adjust to 0-3840, 0-2160
+			// fixedy := float64(coordinate[1]) * float64(0.670391061452514)
 
 			//log.Printf("%d x %d : fixedx: %f x %f", coordinate[0], coordinate[1], fixedx, fixedy)
 
-			robotgo.Move(int(fixedx), int(fixedy))
+			if coordinate[0] != 0 || coordinate[1] != 0 { ydoMove(int(fixedx), int(fixedy)) }
 
 		case m4p.MouseMessage:
 
 			// fmt.Println("Mouse Message %s", m.Mouse.Type)
 			switch m.Mouse.Type {
 			case "mousedown":
-				robotgo.Toggle("left", "down")
+				ydoClick("left", true)
 			case "mouseup":
-				robotgo.Toggle("left", "up")
+				ydoClick("left", false)
 			}
 
 		case m4p.WheelMessage:
-			robotgo.Scroll(0, int(m.Wheel.Delta/60))
+	
+			ydoScroll(int(m.Wheel.Delta))
 		default:
 		}
+	}
+}
+
+// moveCh — координаты для xdotool, буфер 1 (старые выбрасываем)
+var moveCh = make(chan [2]int, 1)
+
+// getXauth читает XAUTHORITY из cmdline kwin_wayland
+func getXauth() string {
+	matches, _ := filepath.Glob("/proc/*/cmdline")
+	for _, f := range matches {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		args := bytes.Split(data, []byte{0})
+		for i, a := range args {
+			if string(a) == "--xwayland-xauthority" && i+1 < len(args) {
+				return string(args[i+1])
+			}
+		}
+	}
+	return ""
+}
+
+func initMoveWorker() {
+	go func() {
+		var xdoStdin io.WriteCloser
+		var xdoCmd *exec.Cmd
+
+		startXdotool := func() {
+			if xdoStdin != nil {
+				xdoStdin.Close()
+			}
+			xauth := getXauth()
+			cmd := exec.Command("/usr/bin/xdotool", "-")
+			cmd.Env = append(os.Environ(), "DISPLAY=:0", "XAUTHORITY="+xauth)
+			stdin, err := cmd.StdinPipe()
+			if err != nil {
+				log.Printf("xdotool stdin pipe error: %v", err)
+				return
+			}
+			if err := cmd.Start(); err != nil {
+				log.Printf("xdotool start error: %v", err)
+				return
+			}
+			xdoCmd = cmd
+			xdoStdin = stdin
+			log.Printf("xdotool started, XAUTHORITY=%s", xauth)
+		}
+
+		startXdotool()
+
+		for pos := range moveCh {
+			if xdoStdin == nil {
+				startXdotool()
+				if xdoStdin == nil {
+					continue
+				}
+			}
+			_, err := fmt.Fprintf(xdoStdin, "mousemove %d %d\n", pos[0], pos[1])
+			if err != nil {
+				log.Printf("xdotool write error: %v, restarting", err)
+				if xdoCmd != nil {
+					xdoCmd.Wait()
+				}
+				xdoStdin = nil
+				startXdotool()
+				if xdoStdin != nil {
+					fmt.Fprintf(xdoStdin, "mousemove %d %d\n", pos[0], pos[1])
+				}
+			}
+		}
+	}()
+}
+
+func ydoMove(x, y int) {
+	if x == 0 && y == 0 {
+		return
+	}
+	select {
+	case moveCh <- [2]int{x, y}:
+	default:
+		select {
+		case <-moveCh:
+		default:
+		}
+		moveCh <- [2]int{x, y}
+	}
+}
+
+func ydoCmd(args ...string) {
+	cmd := exec.Command("/usr/bin/xdotool", args...)
+	xauth := getXauth()
+	cmd.Env = append(os.Environ(), "DISPLAY=:0", "XAUTHORITY="+xauth)
+	if err := cmd.Run(); err != nil {
+		log.Printf("xdotool %v error: %v", args, err)
+	}
+}
+
+func ydoKey(key string, down bool) {
+	if down {
+		ydoCmd("keydown", key)
+	} else {
+		ydoCmd("keyup", key)
+	}
+}
+
+func ydoClick(button string, down bool) {
+	if button == "left" {
+		if down {
+			ydoCmd("mousedown", "1")
+		} else {
+			ydoCmd("mouseup", "1")
+		}
+	} else if button == "right" {
+		if down {
+			ydoCmd("mousedown", "3")
+		} else {
+			ydoCmd("mouseup", "3")
+		}
+	} else if button == "x1" {
+		if down {
+			ydoCmd("mousedown", "8")
+		} else {
+			ydoCmd("mouseup", "8")
+		}
+	} else if button == "x2" {
+		if down {
+			ydoCmd("mousedown", "9")
+		} else {
+			ydoCmd("mouseup", "9")
+		}
+	}
+}
+
+func ydoScroll(delta int) {
+	if delta > 0 {
+		ydoCmd("click", "4")
+	} else {
+		ydoCmd("click", "5")
 	}
 }

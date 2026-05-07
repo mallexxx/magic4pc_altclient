@@ -155,7 +155,6 @@ recvLoop:
 func (c *Client) keepalive() {
 	defer c.Close()
 
-	serverDeadline := time.After(keepaliveTimeout)
 	clientKeepalive := time.After(clientKeepaliveInterval)
 
 	for {
@@ -164,11 +163,7 @@ func (c *Client) keepalive() {
 			return
 
 		case <-c.serverKeepalive:
-			serverDeadline = time.After(keepaliveTimeout)
-
-		case <-serverDeadline:
-			log.Printf("m4p: Client: keepalive: server keepalive deadline reached, disconnecting...")
-			return
+			// server is alive, nothing to do
 
 		case <-clientKeepalive:
 			_, err := c.conn.Write([]byte("{}"))
