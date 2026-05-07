@@ -143,8 +143,18 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 				ydoKey("XF86AudioPause", state == "down")
 			case 461: // back
 				ydoClick("x1", state == "down")
-			case 403: // red
-				ydoKey("super", state == "down")
+			case 403: // red → Steam menu in gamescope, Super in KDE
+				if state == "down" {
+					if isGamescopeSession() {
+						go sendSteamMenu()
+					} else {
+						ydoKey("super", true)
+					}
+				} else {
+					if !isGamescopeSession() {
+						ydoKey("super", false)
+					}
+				}
 			case 404: // green
 				ydoKey("Escape", state == "down")
 			case 33: // Ch Up
@@ -306,6 +316,32 @@ func updateScale(disp, xauth string) {
 	scaleX.Store(sx)
 	scaleY.Store(sy)
 	log.Printf("screen size: %dx%d → scale %.4f×%.4f", w, h, sx, sy)
+}
+
+
+// isGamescopeSession returns true if we're running in gamescope (no kwin_wayland).
+func isGamescopeSession() bool {
+	matches, _ := filepath.Glob("/proc/*/cmdline")
+	for _, f := range matches {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		if bytes.Contains(data, []byte("kwin_wayland")) {
+			return false
+		}
+	}
+	return true
+}
+
+// sendSteamMenu sends Ctrl+1 via ydotool — opens/closes Steam menu in gamescope.
+// Only fires on press (not release) to avoid double-toggle.
+func sendSteamMenu() {
+	cmd := exec.Command("/usr/bin/ydotool", "key", "29:1", "2:1", "2:0", "29:0")
+	cmd.Env = append(os.Environ(), "YDOTOOL_SOCKET=/run/user/1000/.ydotool_socket")
+	if err := cmd.Run(); err != nil {
+		log.Printf("sendSteamMenu: %v", err)
+	}
 }
 
 
