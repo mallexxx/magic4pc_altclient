@@ -7,6 +7,8 @@ const (
 	protocolVersion         = 1
 	keepaliveTimeout        = 3 * time.Second
 	clientKeepaliveInterval = 2 * time.Second
+	// serverKeepaliveTimeout: if TV stops sending keepalives for this long → disconnect → reconnect.
+	serverKeepaliveTimeout = 10 * time.Second
 )
 
 // Magic remote keycodes.

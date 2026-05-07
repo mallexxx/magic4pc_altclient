@@ -8,17 +8,28 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/go-vgo/robotgo"
 	"github.com/netham45/magic4pc_altclient/m4p"
 )
 
+// TV always sends coords in 1920×1080 space.
+const tvWidth = 1920.0
+const tvHeight = 1080.0
+
 func main() {
+	inputInit()
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		os.Exit(1)
+	}()
+
 	go startUDPListener()
 
 	ipAddr := "192.168.1.75"
@@ -37,26 +48,18 @@ func main() {
 
 	dev := m4p.DeviceInfo{IPAddr: ipAddr, Port: port}
 	for {
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-
-		select {
-		case <-ctx.Done():
-			fmt.Println("Exiting...")
-			return
-		default:
-
-			if err := connect(ctx, dev); err != nil {
-				fmt.Println("Failed to connect, retrying in 5 seconds...")
+		if err := connect(context.Background(), dev); err != nil {
+			if err == context.Canceled {
+				fmt.Println("Exiting 2...")
 			}
-
-			time.Sleep(5 * time.Second)
+			fmt.Println("Failed to connect,", err, "retrying in 2 seconds...")
 		}
+		time.Sleep(2 * time.Second)
 	}
 }
 
 const (
-	listenAddr = "0.0.0.0:9105" // sleep UDP listen address
+	listenAddr = "0.0.0.0:9105"
 )
 
 func startUDPListener() {
@@ -65,18 +68,14 @@ func startUDPListener() {
 		fmt.Println("Error resolving UDP address:", err)
 		os.Exit(1)
 	}
-
 	conn, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
 		fmt.Println("Error listening:", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
-
 	fmt.Println("UDP server started. Listening on", listenAddr)
-
 	buffer := make([]byte, 1024)
-
 	for {
 		n, addr, err := conn.ReadFromUDP(buffer)
 		if err != nil {
@@ -84,20 +83,6 @@ func startUDPListener() {
 			continue
 		}
 		fmt.Printf("Received UDP packet from %s: %s\n", addr.String(), string(buffer[:n]))
-
-		// If a sleep command is received, put the system to sleep
-		if string(buffer[:n]) == "sleep" {
-			fmt.Println("Received sleep command. Putting system to sleep...")
-
-			// Execute a Windows shell command to put the system to sleep
-			cmd := exec.Command("cmd", "/C", "rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
-			err := cmd.Run()
-			if err != nil {
-				fmt.Println("Error executing sleep command:", err)
-				continue
-			}
-			fmt.Println("System is now in sleep mode.")
-		}
 	}
 }
 
@@ -121,38 +106,44 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 		case m4p.InputMessage:
 			key := m.Input.Parameters.KeyCode
 			pressed := m.Input.Parameters.IsDown
-			state := "up"
-			if pressed {
-				state = "down"
-			}
-			log.Printf("Key: %i pressed: %b", key, pressed)
+			log.Printf("Key: %d pressed: %v", key, pressed)
 			switch key {
+			case 37: // Left
+				inputKey("Left", pressed)
+			case 38: // Up
+				inputKey("Up", pressed)
+			case 39: // Right
+				inputKey("Right", pressed)
+			case 40: // Down
+				inputKey("Down", pressed)
 			case 415: // play
-				robotgo.KeyToggle("audio_play", state)
+				inputKey("XF86AudioPlay", pressed)
+			case 413: // stop
+				inputKey("XF86AudioStop", pressed)
 			case 0x13: // pause
-				robotgo.KeyToggle("audio_pause", state)
-
+				inputKey("XF86AudioPause", pressed)
 			case 461: // back
-				robotgo.Toggle("x1", state) // XBUTTON1 == Go Back
-
-			case 403: // red
-				robotgo.KeyToggle("cmd", state)
-
+				inputClick("x1", pressed)
+			case 403: // red — platform-specific (Steam menu / Super)
+				inputRedKey(pressed)
 			case 404: // green
-				robotgo.KeyToggle("escape", state)
-
-			case 405: // yellow
-				break
-
-			case 406: // blue
-				robotgo.Toggle("x2", state) // XBUTTON2 == Go Forward
-
+				inputKey("Escape", pressed)
+			case 33: // Ch Up
+				inputKey("Prior", pressed)
+			case 34: // Ch Down
+				inputKey("Next", pressed)
+			case 405: // yellow — platform-specific (Steam QAM / middle click)
+				inputYellowKey(pressed)
+			case 406: // blue → right click
+				inputClick("right", pressed)
+			case 13: // Enter
+				inputKey("Return", pressed)
 			case 458: // GUIDE
-				robotgo.Toggle("right", state) // Right click
-
+				inputClick("right", pressed)
 			default:
-				if key < 1000 {
-					robotgo.KeyToggles(key, state)
+				if key >= 32 && key < 127 {
+					// ASCII range — send as character
+					inputKey(strings.ToLower(string(rune(key))), pressed)
 				}
 			}
 
@@ -175,28 +166,21 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 					break
 				}
 			}
-
-			// fixedx := float64(coordinate[0]) * float64(1.00313479624) // Mouse only ranges from 0-1914, 0-1074, adjust to 0-1920, 0-1080
-			// fixedy := float64(coordinate[1]) * float64(1.00558659218)
-			fixedx := float64(coordinate[0]) * float64(0.668756530825496) // Mouse only ranges from 0-1914, 0-1074, adjust to 0-3840, 0-2160
-			fixedy := float64(coordinate[1]) * float64(0.670391061452514)
-
-			//log.Printf("%d x %d : fixedx: %f x %f", coordinate[0], coordinate[1], fixedx, fixedy)
-
-			robotgo.Move(int(fixedx), int(fixedy))
+			if coordinate[0] != 0 || coordinate[1] != 0 {
+				inputMove(int(coordinate[0]), int(coordinate[1]))
+			}
 
 		case m4p.MouseMessage:
-
-			// fmt.Println("Mouse Message %s", m.Mouse.Type)
 			switch m.Mouse.Type {
 			case "mousedown":
-				robotgo.Toggle("left", "down")
+				inputClick("left", true)
 			case "mouseup":
-				robotgo.Toggle("left", "up")
+				inputClick("left", false)
 			}
 
 		case m4p.WheelMessage:
-			robotgo.Scroll(0, int(m.Wheel.Delta/60))
+			inputScroll(int(m.Wheel.Delta))
+
 		default:
 		}
 	}
