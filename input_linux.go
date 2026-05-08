@@ -98,6 +98,15 @@ func inputScroll(delta int) {
 	}
 }
 
+// inputBackKey: Esc in gamescope (Steam Big Picture), x1 mouse button in KDE.
+func inputBackKey(pressed bool) {
+	if isGamescopeSession() {
+		inputKey("Escape", pressed)
+	} else {
+		inputClick("x1", pressed)
+	}
+}
+
 // inputRedKey: Ctrl+1 (Steam menu) in gamescope, Super in KDE.
 func inputRedKey(pressed bool) {
 	if pressed {

@@ -122,8 +122,8 @@ func connect(ctx context.Context, dev m4p.DeviceInfo) error {
 				inputKey("XF86AudioStop", pressed)
 			case 0x13: // pause
 				inputKey("XF86AudioPause", pressed)
-			case 461: // back
-				inputClick("x1", pressed)
+					case 461: // back
+						inputBackKey(pressed)
 			case 403: // red — platform-specific (Steam menu / Super)
 				inputRedKey(pressed)
 			case 404: // green

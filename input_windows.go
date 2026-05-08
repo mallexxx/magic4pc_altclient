@@ -60,6 +60,11 @@ func inputScroll(delta int) {
 	}
 }
 
+// inputBackKey: x1 mouse button on Windows (browser back).
+func inputBackKey(pressed bool) {
+	inputClick("x1", pressed)
+}
+
 // inputRedKey: Super (Win key) on Windows.
 func inputRedKey(pressed bool) {
 	state := "up"
